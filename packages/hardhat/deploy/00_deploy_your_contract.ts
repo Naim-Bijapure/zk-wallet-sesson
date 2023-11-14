@@ -1,32 +1,45 @@
-import { utils, Provider, Wallet } from "zksync-web3";
+import { utils, Wallet, Provider } from "zksync-web3";
 import * as ethers from "ethers";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
-import { Deployer } from "@matterlabs/hardhat-zksync-deploy";
 
-const deployerPrivateKey =
-  process.env.DEPLOYER_PRIVATE_KEY ?? "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
+import * as dotenv from "dotenv";
+
+dotenv.config();
+
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY as string;
+const ACCOUNT_OWNER_ADDRESS = process.env.ACCOUNT_OWNER_ADDRESS as string;
+const ACCOUNT_FACTORY_ADDRESS = process.env.ACCOUNT_FACTORY_ADDRESS as string;
+const ACCOUNT_DEPLOYMENT_SALT = process.env.ACCOUNT_DEPLOYMENT_SALT ?? (ethers.constants.HashZero as string);
 
 export default async function (hre: HardhatRuntimeEnvironment) {
-  // const provider = new Provider("https://testnet.era.zksync.dev");
-  const provider = new Provider("http://host.docker.internal:3050");
+  const provider = new Provider((hre.config as any).zkSyncDeploy.zkSyncNetwork);
+  const wallet = new Wallet(DEPLOYER_PRIVATE_KEY).connect(provider);
+  const ownerAddress = ACCOUNT_OWNER_ADDRESS;
+  const factoryArtifact = await hre.artifacts.readArtifact("AccountFactory");
 
-  const wallet = new Wallet(deployerPrivateKey, provider);
+  const acccountFactory = new ethers.Contract(ACCOUNT_FACTORY_ADDRESS, factoryArtifact.abi, wallet);
 
-  const deployer = new Deployer(hre, wallet);
+  const tx = await acccountFactory.deployAccount(ACCOUNT_DEPLOYMENT_SALT, ownerAddress);
+  await tx.wait();
 
-  // const code = await provider.getCode("0xeD46De724A9F0EAbFdB5f601DDA11bfb9ab815c3");
-  // console.log(`n-🔴 => checkContractDeployment => code:`, code);
+  const abiCoder = new ethers.utils.AbiCoder();
+  const accountAddress = utils.create2Address(
+    ACCOUNT_FACTORY_ADDRESS,
+    await acccountFactory.aaBytecodeHash(),
+    ACCOUNT_DEPLOYMENT_SALT,
+    abiCoder.encode(["address"], [ownerAddress]),
+  );
 
-  // // Deploying the ERC20 token
-  const MultiSigFactory = await deployer.loadArtifact("MultiSigFactory");
-  const multiSigFactory = await deployer.deploy(MultiSigFactory, []);
-  console.log(`multiSigFactory deployed at => ${multiSigFactory.address}`);
+  console.log(`Deployment AccountFactory succeeded! ACCOUNT_ADDRESS: ${accountAddress}`);
 
-  const multisigWalletRcpt = await multiSigFactory.create2([wallet.address], 1, "N");
-  const multisigWalletTx = await multisigWalletRcpt.wait();
+  const wallet2 = new Wallet(DEPLOYER_PRIVATE_KEY);
+  const deployer2 = new Deployer(hre, wallet2);
+  const factoryArtifact2 = await deployer2.loadArtifact("AccountFactory");
+  const aaArtifact = await deployer2.loadArtifact("Account");
 
-  const MultisigWallet = await multiSigFactory.getMultiSig(0);
-  console.log(`multisigWallet deployed at =>`, MultisigWallet.multiSigAddress);
+  const bytecodeHash = utils.hashBytecode(aaArtifact.bytecode);
 
-  console.log(`Done!`);
+  const factory = await deployer2.deploy(factoryArtifact2, [bytecodeHash], undefined, [aaArtifact.bytecode]);
+
+  console.log(`Deployment AccountFactory succeeded! ACCOUNT_FACTORY_ADDRESS: ${factory.address}`);
 }
